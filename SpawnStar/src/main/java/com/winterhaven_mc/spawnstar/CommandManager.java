@@ -2,6 +2,7 @@ package com.winterhaven_mc.spawnstar;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 
 import org.bukkit.ChatColor;
@@ -10,8 +11,10 @@ import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+
 
 /**
  * Implements command executor for <code>CreativeNoNo</code> commands.
@@ -20,7 +23,7 @@ import org.bukkit.inventory.ItemStack;
  * @version		1.0
  *  
  */
-public class CommandManager implements CommandExecutor {
+public class CommandManager implements CommandExecutor, TabCompleter {
 
 	private final SpawnStarMain plugin; // reference to main class
 	private ArrayList<String> enabledWorlds;
@@ -34,6 +37,32 @@ public class CommandManager implements CommandExecutor {
 		this.plugin = plugin;
 		plugin.getCommand("spawnstar").setExecutor(this);
 		updateEnabledWorlds();
+	}
+
+	/**
+	 * Tab completer for SpawnStar
+	 */
+	@Override
+	public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+		
+		List<String> returnList = new ArrayList<String>();
+		
+		// return list of valid matching subcommands
+		if (args.length == 1) {
+			
+			for (SubCommand subcmd : SubCommand.values()) {
+				if (sender.hasPermission("spawnstar." + subcmd.toString()) 
+						&& subcmd.toString().startsWith(args[0].toLowerCase())) {
+					returnList.add(subcmd.toString());
+				}
+			}
+		}
+		else if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
+			for (Player player : plugin.getServer().getOnlinePlayers()) {
+				returnList.add(player.getName());
+			}
+		}
+		return returnList;
 	}
 
 
@@ -78,7 +107,6 @@ public class CommandManager implements CommandExecutor {
 				sender.sendMessage(ChatColor.DARK_RED + "DEBUG: true");
 			}
 			sender.sendMessage(ChatColor.GREEN + "Language: " + ChatColor.RESET + plugin.getConfig().getString("language"));
-//			sender.sendMessage(ChatColor.GREEN + "Item: " + ChatColor.RESET + plugin.getConfig().getString("item-material"));
 			sender.sendMessage(ChatColor.GREEN + "Item: " + ChatColor.RESET + SpawnStarUtilities.getStandard().getType().toString());
 			sender.sendMessage(ChatColor.GREEN + "Data: " + ChatColor.RESET + SpawnStarUtilities.getStandard().getData().toString());
 			sender.sendMessage(ChatColor.GREEN + "Minimum spawn distance: " + ChatColor.RESET + plugin.getConfig().getInt("minimum-distance"));
@@ -120,6 +148,9 @@ public class CommandManager implements CommandExecutor {
 			// reload messages
 			plugin.messageManager.reload();
 			
+			// set debug flag
+			plugin.debug = plugin.getConfig().getBoolean("debug");
+			
 			// refresh reference item in case changes were made
 			SpawnStarUtilities.setStandard(SpawnStarUtilities.createItem(1));
 			
@@ -153,12 +184,12 @@ public class CommandManager implements CommandExecutor {
 				return true;				
 			}
 			
-			Player player;
-			String playerstring = "";
+			Player player = null;
+			String playerName = "";
 			int quantity = 1;
 
 			if (args.length > 1) {
-				playerstring = args[1];
+				playerName = args[1];
 			}
 			if (args.length > 2) {
 				try {
@@ -177,51 +208,59 @@ public class CommandManager implements CommandExecutor {
 			}
 			quantity = Math.min(maxQuantity, quantity);
 
-			// check all known players for a match
-			OfflinePlayer[] offlinePlayers = plugin.getServer().getOfflinePlayers();
-			for (OfflinePlayer offlinePlayer : offlinePlayers) {
-				if (playerstring.equalsIgnoreCase(offlinePlayer.getName())) {
-					if (!offlinePlayer.isOnline()) {
-						plugin.messageManager.sendPlayerMessage(sender, "command-fail-player-not-online");
-						return true;
-					}
+			// check exact match first
+			player = plugin.getServer().getPlayer(playerName);
+			
+			// if no match, try substring match
+			if (player == null) {
+				List<Player> playerList = plugin.getServer().matchPlayer(playerName);
+				
+				// if only one matching player, use it, otherwise send error message (no match or more than 1 match)
+				if (playerList.size() == 1) {
+					player = playerList.get(0);
 				}
 			}
 			
-			// try to match a player from given string
-			List<Player> playerList = plugin.getServer().matchPlayer(playerstring);
-			
-			// if only one matching player, use it, otherwise send error message (no match or more than 1 match)
-			if (playerList.size() == 1) {
-				player = playerList.get(0);
+			// if match found, try to give item and return
+			if (player != null) {
+				// add specified quantity of spawnstar(s) to player inventory
+				HashMap<Integer,ItemStack> noFit = player.getInventory().addItem(SpawnStarUtilities.createItem(quantity));
+				
+				// count items that didn't fit in inventory
+				int noFitCount = 0;
+				for (int index : noFit.keySet()) {
+					noFitCount += noFit.get(index).getAmount();
+				}
+				
+				// if remaining items equals quantity given, send player-inventory-full message and return
+				if (noFitCount == quantity) {
+					plugin.messageManager.sendPlayerMessage(sender, "command-fail-give-inventory-full", quantity);
+					return true;
+				}
+				
+				// subtract noFitCount from quantity
+				quantity = quantity - noFitCount;
+				
+				// send success message to player
+				plugin.messageManager.sendPlayerMessage(sender, "command-success-give", quantity);
+				return true;
 			}
-			else {
-				// if unique matching player is not found, send player-not-found message to sender
+			
+			// check if name matches known offline player
+			HashSet<OfflinePlayer> matchedPlayers = new HashSet<OfflinePlayer>();
+			for (OfflinePlayer offlinePlayer : plugin.getServer().getOfflinePlayers()) {
+				if (playerName.equalsIgnoreCase(offlinePlayer.getName())) {
+					matchedPlayers.add(offlinePlayer);
+				}
+			}
+			if (matchedPlayers.isEmpty()) {
 				plugin.messageManager.sendPlayerMessage(sender, "command-fail-player-not-found");
 				return true;
 			}
-
-			// add specified quantity of spawnstar(s) to player inventory
-			HashMap<Integer,ItemStack> noFit = player.getInventory().addItem(SpawnStarUtilities.createItem(quantity));
-			
-			// count items that didn't fit in inventory
-			int noFitCount = 0;
-			for (int index : noFit.keySet()) {
-				noFitCount += noFit.get(index).getAmount();
-			}
-			
-			// if remaining items equals quantity given, send player-inventory-full message and return
-			if (noFitCount == quantity) {
-				plugin.messageManager.sendPlayerMessage(sender, "command-fail-give-inventory-full", quantity);
+			else {
+				plugin.messageManager.sendPlayerMessage(sender, "command-fail-player-not-online");
 				return true;
 			}
-			
-			// subtract noFitCount from quantity
-			quantity = quantity - noFitCount;
-			
-			// send message to player
-			plugin.messageManager.sendPlayerMessage(sender, "command-success-give", quantity);
-			return true;
 		}
 		
 		/*
@@ -256,8 +295,8 @@ public class CommandManager implements CommandExecutor {
 		
 		return false;
 	}
-	
-	
+
+
 	/**
 	 * update enabledWorlds ArrayList field from config file settings
 	 */
