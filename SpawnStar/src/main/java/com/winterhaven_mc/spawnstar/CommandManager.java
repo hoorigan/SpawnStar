@@ -69,6 +69,7 @@ public class CommandManager implements CommandExecutor, TabCompleter {
 	/** command executor method for SpawnStar
 	 * 
 	 */
+	@SuppressWarnings("deprecation")
 	@Override
 	public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
 		int maxArgs = 3;
